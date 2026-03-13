@@ -1,0 +1,9 @@
+services:
+  messenger:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads      # файлы и голосовые сохраняются на диск
+      - ./messenger.db:/app/messenger.db  # база данных сохраняется на диск
+    restart: unless-stopped
