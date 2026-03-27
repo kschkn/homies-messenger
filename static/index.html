@@ -423,7 +423,7 @@ function initApp() {
   av.style.background=me.avatar_color;
   av.textContent=(me.display_name||me.username)[0].toUpperCase();
   document.getElementById('my-name').textContent=me.display_name||me.username;
-  loadChats(); connectWS(); requestNotifPermission(); checkMobile(); initVoiceBtn();
+  loadChats(); connectWS(); requestNotifPermission(); checkMobile(); initVoiceBtn(); initPushNotifications();
   document.addEventListener('click', hideCtxMenu);
 }
 
@@ -1061,6 +1061,55 @@ window.addEventListener('resize',checkMobile);
 function previewImage(src){document.getElementById('preview-img').src=src;document.getElementById('img-preview').classList.add('open');}
 function formatTime(iso){const d=new Date(iso),now=new Date();return d.toDateString()===now.toDateString()?d.toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}):d.toLocaleDateString('ru',{day:'numeric',month:'short'});}
 function escHtml(str){return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// ─── Push Notifications (Capacitor) ──────────────────────────
+
+async function initPushNotifications() {
+    if (!isCapacitor) return;
+
+    try {
+        const { PushNotifications } = await import('@capacitor/push-notifications');
+
+        // Запрос разрешения
+        const permStatus = await PushNotifications.requestPermissions();
+        if (permStatus.receive !== 'granted') return;
+
+        // Регистрация
+        await PushNotifications.register();
+
+        // Получение токена
+        PushNotifications.addListener('registration', async (tkn) => {
+            const platform = window.Capacitor.getPlatform(); // 'android' | 'ios'
+            await fetch(`${API}/api/device-token?token=${encodeURIComponent(token)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fcm_token: tkn.value, platform })
+            });
+        });
+
+        // Ошибка регистрации
+        PushNotifications.addListener('registrationError', (error) => {
+            console.error('Push registration error:', error);
+        });
+
+        // Клик по уведомлению — открыть нужный чат
+        PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
+            const chatId = notification.notification.data?.chat_id;
+            if (chatId) {
+                const chat = allChats.find(c => c.id === parseInt(chatId));
+                if (chat) openChat(chat);
+            }
+        });
+
+        // Уведомление пришло когда приложение в foreground
+        PushNotifications.addListener('pushNotificationReceived', (notification) => {
+            console.log('Push in foreground:', notification);
+        });
+
+    } catch (e) {
+        console.error('Push init error:', e);
+    }
+}
 
 // ─── Capacitor Integration ────────────────────────────────────
 

@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Boolean, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -81,6 +81,15 @@ class Message(Base):
     reply_to = relationship("Message", remote_side="Message.id", foreign_keys=[reply_to_id])
 
 
+class DeviceToken(Base):
+    __tablename__ = 'device_tokens'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    token = Column(String, nullable=False, unique=True)
+    platform = Column(String, default='android')  # 'android' | 'ios' | 'web'
+    created_at = Column(DateTime, default=func.now())
+
+
 def create_tables():
     Base.metadata.create_all(bind=engine)
 
@@ -99,3 +108,8 @@ def create_tables():
         if 'reactions' not in existing:
             conn.execute(text("ALTER TABLE messages ADD COLUMN reactions TEXT DEFAULT '{}'"))
         conn.commit()
+
+    # Миграция: создаём таблицу device_tokens если её нет
+    existing_tables = inspector.get_table_names()
+    if 'device_tokens' not in existing_tables:
+        DeviceToken.__table__.create(bind=engine, checkfirst=True)
