@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Homies</string>
+    <string name="title_activity_main">Homies</string>
+    <string name="package_name">com.homies.messenger</string>
+    <string name="custom_url_scheme">com.homies.messenger</string>
+</resources>
