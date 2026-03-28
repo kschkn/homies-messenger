@@ -4,3 +4,7 @@ __pycache__
 .env
 messenger.db
 uploads/
+node_modules/
+android/
+ios/
+.claude/

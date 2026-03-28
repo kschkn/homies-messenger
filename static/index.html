@@ -2,7 +2,11 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f0f13">
+<link rel="manifest" href="/static/manifest.json">
 <title>Мессенджер</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Onest:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -16,7 +20,9 @@
   --bubble-me:#2d2458; --bubble-them:#1e1e28;
   --sidebar-w:300px;
 }
-html,body{height:100%;overflow:hidden;font-family:'Onest',sans-serif;background:var(--bg);color:var(--text);}
+html,body{height:100%;overflow:hidden;font-family:'Onest',sans-serif;background:var(--bg);color:var(--text);
+  padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);
+  padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);}
 
 /* ── AUTH ── */
 #auth-screen{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 30% 50%,#1a1535 0%,var(--bg) 60%);padding:16px;}
@@ -325,7 +331,18 @@ html,body{height:100%;overflow:hidden;font-family:'Onest',sans-serif;background:
 </div>
 
 <script>
-const API = '';
+// ─── Capacitor Detection & Server Config ──────────────────────
+const isCapacitor = typeof window.Capacitor !== 'undefined';
+
+// Укажите URL вашего сервера для мобильного приложения:
+const SERVER_URL = 'https://YOUR_SERVER_URL';
+
+const API = isCapacitor ? SERVER_URL : '';
+const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+const wsUrl = isCapacitor
+  ? SERVER_URL.replace(/^http/, 'ws') + '/ws/'
+  : `${wsProto}://${location.host}/ws/`;
+
 let token = localStorage.getItem('token');
 let me = JSON.parse(localStorage.getItem('me') || 'null');
 let ws = null;
@@ -369,7 +386,7 @@ async function login() {
   const username = document.getElementById('l-username').value.trim();
   const password = document.getElementById('l-password').value;
   if (!username||!password) return showAuthError('Заполните все поля');
-  const r = await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
+  const r = await fetch(`${API}/api/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
   const data = await r.json();
   if (!r.ok) return showAuthError(data.detail||'Ошибка входа');
   saveSession(data);
@@ -380,7 +397,7 @@ async function register() {
   const display_name = document.getElementById('r-display').value.trim();
   const password = document.getElementById('r-password').value;
   if (!username||!password) return showAuthError('Заполните обязательные поля');
-  const r = await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password,display_name})});
+  const r = await fetch(`${API}/api/register`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password,display_name})});
   const data = await r.json();
   if (!r.ok) return showAuthError(data.detail||'Ошибка регистрации');
   saveSession(data);
@@ -406,7 +423,7 @@ function initApp() {
   av.style.background=me.avatar_color;
   av.textContent=(me.display_name||me.username)[0].toUpperCase();
   document.getElementById('my-name').textContent=me.display_name||me.username;
-  loadChats(); connectWS(); requestNotifPermission(); checkMobile(); initVoiceBtn();
+  loadChats(); connectWS(); requestNotifPermission(); checkMobile(); initVoiceBtn(); initPushNotifications();
   document.addEventListener('click', hideCtxMenu);
 }
 
@@ -464,8 +481,7 @@ function clearUnread(chatId) {
 // ─── WebSocket ────────────────────────────────────────────────
 
 function connectWS() {
-  const proto=location.protocol==='https:'?'wss':'ws';
-  ws=new WebSocket(`${proto}://${location.host}/ws/${token}`);
+  ws=new WebSocket(`${wsUrl}${token}`);
   ws.onmessage=(e)=>{
     const data=JSON.parse(e.data);
     if (data.type==='new_message') handleNewMessage(data.message);
@@ -515,7 +531,7 @@ function handleReaction(msgId, reactions) {
 // ─── Chats ────────────────────────────────────────────────────
 
 async function loadChats() {
-  const r=await fetch(`/api/chats?token=${token}`);
+  const r=await fetch(`${API}/api/chats?token=${token}`);
   allChats=await r.json(); renderChats(allChats);
 }
 
@@ -556,7 +572,7 @@ async function openChat(chat) {
   document.getElementById('empty-state').style.display='none';
   document.getElementById('chat-view').style.display='flex';
   closeSidebar(); cancelReply(); cancelEdit();
-  const r=await fetch(`/api/chats/${chat.id}/messages?token=${token}`);
+  const r=await fetch(`${API}/api/chats/${chat.id}/messages?token=${token}`);
   const messages=await r.json();
   const area=document.getElementById('messages-area'); area.innerHTML='';
   messages.forEach(m=>appendMessage(m)); scrollToBottom();
@@ -802,7 +818,7 @@ async function sendFile(input) {
   const fd=new FormData();
   fd.append('token',token); fd.append('chat_id',currentChatId); fd.append('file',input.files[0]);
   if (replyToMsg) { fd.append('reply_to_id',replyToMsg.id); cancelReply(); }
-  await fetch('/api/upload',{method:'POST',body:fd});
+  await fetch(`${API}/api/upload`,{method:'POST',body:fd});
   input.value='';
 }
 
@@ -862,7 +878,7 @@ async function uploadVoice() {
   fd.append('token',token); fd.append('chat_id',currentChatId);
   fd.append('file',blob,`voice.${ext}`); fd.append('is_voice','true');
   if (replyToMsg){fd.append('reply_to_id',replyToMsg.id);cancelReply();}
-  await fetch('/api/upload',{method:'POST',body:fd});
+  await fetch(`${API}/api/upload`,{method:'POST',body:fd});
 }
 
 function toggleVoice(id,src,btn) {
@@ -953,7 +969,7 @@ async function sendCircle() {
   fd.append('chat_id', chatId);
   fd.append('file', blob, `circle.${ext}`);
   fd.append('is_video_circle', 'true');
-  await fetch('/api/upload', { method: 'POST', body: fd });
+  await fetch(`${API}/api/upload`, { method: 'POST', body: fd });
 }
 
 function cancelCircle() {
@@ -987,7 +1003,7 @@ function toggleCirclePlay(wrap) {
 
 async function openNewChat() {
   selectedUsers.clear(); document.getElementById('create-btn').disabled=true;
-  const r=await fetch(`/api/users?token=${token}`);
+  const r=await fetch(`${API}/api/users?token=${token}`);
   const users=await r.json();
   const list=document.getElementById('users-list'); list.innerHTML='';
   if(!users.length){list.innerHTML='<div style="color:var(--text2);font-size:13px;padding:8px">Нет других пользователей</div>';}
@@ -1012,7 +1028,7 @@ function toggleUser(el,userId){
 
 async function createChat(){
   const memberIds=[...selectedUsers]; const isGroup=memberIds.length>1;
-  const r=await fetch(`/api/chats?token=${token}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({member_ids:memberIds,is_group:isGroup,name:isGroup?'Группа':null})});
+  const r=await fetch(`${API}/api/chats?token=${token}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({member_ids:memberIds,is_group:isGroup,name:isGroup?'Группа':null})});
   const data=await r.json(); closeNewChat(); await loadChats();
   const chat=allChats.find(c=>c.id===data.id); if(chat) openChat(chat);
 }
@@ -1045,6 +1061,88 @@ window.addEventListener('resize',checkMobile);
 function previewImage(src){document.getElementById('preview-img').src=src;document.getElementById('img-preview').classList.add('open');}
 function formatTime(iso){const d=new Date(iso),now=new Date();return d.toDateString()===now.toDateString()?d.toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}):d.toLocaleDateString('ru',{day:'numeric',month:'short'});}
 function escHtml(str){return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// ─── Push Notifications (Capacitor) ──────────────────────────
+
+async function initPushNotifications() {
+    if (!isCapacitor) return;
+
+    try {
+        const { PushNotifications } = await import('@capacitor/push-notifications');
+
+        // Запрос разрешения
+        const permStatus = await PushNotifications.requestPermissions();
+        if (permStatus.receive !== 'granted') return;
+
+        // Регистрация
+        await PushNotifications.register();
+
+        // Получение токена
+        PushNotifications.addListener('registration', async (tkn) => {
+            const platform = window.Capacitor.getPlatform(); // 'android' | 'ios'
+            await fetch(`${API}/api/device-token?token=${encodeURIComponent(token)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fcm_token: tkn.value, platform })
+            });
+        });
+
+        // Ошибка регистрации
+        PushNotifications.addListener('registrationError', (error) => {
+            console.error('Push registration error:', error);
+        });
+
+        // Клик по уведомлению — открыть нужный чат
+        PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
+            const chatId = notification.notification.data?.chat_id;
+            if (chatId) {
+                const chat = allChats.find(c => c.id === parseInt(chatId));
+                if (chat) openChat(chat);
+            }
+        });
+
+        // Уведомление пришло когда приложение в foreground
+        PushNotifications.addListener('pushNotificationReceived', (notification) => {
+            console.log('Push in foreground:', notification);
+        });
+
+    } catch (e) {
+        console.error('Push init error:', e);
+    }
+}
+
+// ─── Capacitor Integration ────────────────────────────────────
+
+if (isCapacitor) {
+  // Стилизация статус-бара
+  import('@capacitor/status-bar').then(({ StatusBar, Style }) => {
+    StatusBar.setStyle({ style: Style.Dark });
+    StatusBar.setBackgroundColor({ color: '#0f0f13' });
+  }).catch(() => {});
+
+  // Обработка клавиатуры — прокрутка к последнему сообщению при появлении
+  import('@capacitor/keyboard').then(({ Keyboard }) => {
+    Keyboard.addListener('keyboardDidShow', () => {
+      scrollToBottom();
+    });
+  }).catch(() => {});
+
+  // App lifecycle — переподключение WebSocket при возврате из фона
+  import('@capacitor/app').then(({ App }) => {
+    App.addListener('appStateChange', ({ isActive }) => {
+      if (isActive && token && (!ws || ws.readyState !== WebSocket.OPEN)) {
+        connectWS();
+      }
+    });
+  }).catch(() => {});
+}
+
+// Дополнительно: обработка resume для браузера и Capacitor
+document.addEventListener('resume', () => {
+  if (token && (!ws || ws.readyState !== WebSocket.OPEN)) {
+    connectWS();
+  }
+});
 </script>
 </body>
 </html>

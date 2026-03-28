@@ -11,7 +11,36 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from database import get_db, create_tables, User, Chat, ChatMember, Message
+from database import get_db, create_tables, User, Chat, ChatMember, Message, DeviceToken
+
+import logging
+logger = logging.getLogger(__name__)
+
+# ─── Firebase Init (optional) ────────────────────────────────
+firebase_enabled = False
+try:
+    import firebase_admin
+    from firebase_admin import credentials, messaging
+
+    if os.path.exists("firebase-credentials.json"):
+        cred = credentials.Certificate("firebase-credentials.json")
+        firebase_admin.initialize_app(cred)
+        firebase_enabled = True
+        logger.info("Firebase initialized from firebase-credentials.json")
+    elif os.environ.get("FIREBASE_CREDENTIALS"):
+        import tempfile
+        cred_json = os.environ["FIREBASE_CREDENTIALS"]
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            f.write(cred_json)
+            tmp_path = f.name
+        cred = credentials.Certificate(tmp_path)
+        firebase_admin.initialize_app(cred)
+        firebase_enabled = True
+        logger.info("Firebase initialized from FIREBASE_CREDENTIALS env var")
+    else:
+        logger.warning("Firebase credentials not found. Push notifications disabled.")
+except ImportError:
+    logger.warning("firebase-admin not installed. Push notifications disabled.")
 
 app = FastAPI(title="Home Messenger")
 
@@ -146,6 +175,15 @@ class CreateChatRequest(BaseModel):
     name: Optional[str] = None
     member_ids: list[int]
     is_group: bool = False
+
+
+class DeviceTokenRequest(BaseModel):
+    fcm_token: str
+    platform: str = "android"
+
+
+class DeleteDeviceTokenRequest(BaseModel):
+    fcm_token: str
 
 
 # ─── Auth ─────────────────────────────────────────────────────
@@ -315,7 +353,88 @@ async def upload_file(
     db.refresh(msg)
 
     await manager.broadcast_to_chat(chat_id, {"type": "new_message", "message": message_to_dict(msg)}, db)
+    send_push_notification(chat_id, me.id, me.display_name or me.username, None, msg_type, db)
     return {"ok": True, "message": message_to_dict(msg)}
+
+
+# ─── Device Token Endpoints ───────────────────────────────────
+
+@app.post("/api/device-token")
+def register_device_token(req: DeviceTokenRequest, token: str, db: Session = Depends(get_db)):
+    me = get_user_by_token(token, db)
+    if not me:
+        raise HTTPException(status_code=401)
+    existing = db.query(DeviceToken).filter(DeviceToken.token == req.fcm_token).first()
+    if existing:
+        existing.user_id = me.id
+        existing.platform = req.platform
+    else:
+        db.add(DeviceToken(user_id=me.id, token=req.fcm_token, platform=req.platform))
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/device-token")
+def delete_device_token(req: DeleteDeviceTokenRequest, token: str, db: Session = Depends(get_db)):
+    me = get_user_by_token(token, db)
+    if not me:
+        raise HTTPException(status_code=401)
+    db.query(DeviceToken).filter(DeviceToken.token == req.fcm_token).delete()
+    db.commit()
+    return {"ok": True}
+
+
+# ─── Push Notifications ──────────────────────────────────────
+
+def send_push_notification(chat_id: int, sender_id: int, sender_name: str, content: str, message_type: str, db: Session):
+    if not firebase_enabled:
+        return
+
+    # Определяем превью контента
+    type_previews = {
+        "image": "Фото",
+        "voice": "Голосовое",
+        "video_circle": "Видео",
+        "file": "Файл",
+    }
+    body = type_previews.get(message_type, content or "")
+
+    # Находим всех участников чата кроме отправителя
+    members = db.query(ChatMember).filter(
+        ChatMember.chat_id == chat_id,
+        ChatMember.user_id != sender_id
+    ).all()
+
+    for member in members:
+        # Отправляем push только если пользователь не имеет активного WebSocket
+        if member.user_id in manager.active and manager.active[member.user_id]:
+            continue
+
+        # Получаем все токены устройств этого пользователя
+        tokens = db.query(DeviceToken).filter(DeviceToken.user_id == member.user_id).all()
+        for dt in tokens:
+            try:
+                msg = messaging.Message(
+                    notification=messaging.Notification(
+                        title=sender_name,
+                        body=body,
+                    ),
+                    data={
+                        'chat_id': str(chat_id),
+                        'sender_id': str(sender_id),
+                        'type': 'new_message'
+                    },
+                    token=dt.token
+                )
+                messaging.send(msg)
+            except Exception as e:
+                error_str = str(e).lower()
+                if 'not-found' in error_str or 'invalid' in error_str or 'unregistered' in error_str:
+                    db.query(DeviceToken).filter(DeviceToken.id == dt.id).delete()
+                    db.commit()
+                    logger.info(f"Removed invalid FCM token for user {member.user_id}")
+                else:
+                    logger.error(f"FCM send error: {e}")
 
 
 # ─── WebSocket ────────────────────────────────────────────────
@@ -359,6 +478,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str, db: Session = Dep
                 db.refresh(msg)
 
                 await manager.broadcast_to_chat(chat_id, {"type": "new_message", "message": message_to_dict(msg)}, db)
+                send_push_notification(chat_id, me.id, me.display_name or me.username, content, "text", db)
 
             # ── Редактирование ──
             elif data["type"] == "edit_message":
